@@ -74,7 +74,7 @@ def create_fallback_response(request: TicketRequest, rule_case: CaseType, matche
     amount = signals.get("amount")
     
     severity = rules.calculate_severity(rule_case, amount)
-    department = rules.get_department(rule_case)
+    department = rules.get_department(rule_case, amount, rule_verdict)
     
     # Construct strings
     relevant_txn_id = matched_txn.get("transaction_id") or matched_txn.get("txn_id") if matched_txn else None
@@ -168,17 +168,9 @@ def analyze_ticket_flow(request: TicketRequest) -> TicketResponse:
             except ValueError:
                 case_type = rule_case
                 
-            # Severity validation
-            try:
-                severity = Severity(ai_data.get("severity"))
-            except ValueError:
-                severity = rules.calculate_severity(case_type, signals.get("amount"))
-                
-            # Department validation
-            try:
-                department = Department(ai_data.get("department"))
-            except ValueError:
-                department = rules.get_department(case_type)
+            # Enforce deterministic severity and department calculation
+            severity = rules.calculate_severity(case_type, signals.get("amount"))
+            department = rules.get_department(case_type, signals.get("amount"), evidence_verdict)
                 
             # Set relevant transaction ID (guarantee it exists in list or is matched)
             relevant_txn_id = ai_data.get("relevant_transaction_id")

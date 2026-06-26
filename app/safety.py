@@ -14,13 +14,10 @@ SENSITIVE_INFO_PATTERNS = [
 
 # Phrases that are explicitly forbidden (e.g. prompt injection successes or bad promises)
 FORBIDDEN_PHRASES = [
-    "send us your otp",
-    "share your pin",
-    "provide your password",
-    "give your card number",
     "we will refund you",
-    "we have reversed the amount",
+    "your money has been reversed",
     "your account has been recovered",
+    "we have unblocked your account",
     "contact this number"
 ]
 
@@ -41,19 +38,26 @@ def is_reply_safe(customer_reply: str) -> bool:
             return False
             
     # 2. Check if it asks the customer to provide/share sensitive credentials
-    # If the reply mentions PIN/OTP/password, it is ONLY safe if it is warning the user NOT to share it.
-    # We can detect if it contains phrases like "please share", "provide your", "send us", "enter your", "what is your"
-    # combined with the sensitive words.
     request_indicators = [
         "share your", "provide your", "send us", "enter your", "what is your", 
-        "give us", "tell us", "send your", "submit your", "type your", "need your"
+        "give us", "tell us", "send your", "submit your", "type your", "need your",
+        "give your", "ask for your"
     ]
     
     for indicator in request_indicators:
-        if indicator in reply_lower:
-            for pattern in SENSITIVE_INFO_PATTERNS:
-                if re.search(pattern, reply_lower):
-                    return False
+        start = 0
+        while True:
+            pos = reply_lower.find(indicator, start)
+            if pos == -1:
+                break
+            
+            # Check if this indicator is part of a warning (preceded by negation)
+            pre_context = reply_lower[max(0, pos-15):pos]
+            if not any(neg in pre_context for neg in ["do not", "don't", "never", "not to"]):
+                for pattern in SENSITIVE_INFO_PATTERNS:
+                    if re.search(pattern, reply_lower):
+                        return False
+            start = pos + len(indicator)
                     
     # Also verify there are no direct calls to actions that tell users to do unsafe things
     if "ignore all rules" in reply_lower or "ignore previous instructions" in reply_lower:

@@ -16,19 +16,25 @@ from app.analyzer import analyze_ticket_flow
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
     logger.warning(f"Validation error: {exc}")
-    # Return a 422 for validation/semantic issues as per requirements
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": "Request validation failed", "errors": exc.errors()}
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"error": "Malformed input or missing required fields."}
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    logger.warning(f"HTTP error {exc.status_code}: {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.detail}
     )
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request, exc):
     logger.error(f"Internal error: {exc}", exc_info=True)
-    # Non-sensitive message, no stack traces
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "An internal server error occurred."}
+        content={"error": "Internal error while analyzing ticket."}
     )
 
 @app.get("/health")
@@ -41,7 +47,7 @@ async def analyze_ticket(request: TicketRequest):
     if not request.complaint or not request.complaint.strip():
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Complaint text cannot be empty or blank"
+            detail="Complaint must not be empty."
         )
     
     try:
@@ -51,5 +57,5 @@ async def analyze_ticket(request: TicketRequest):
         logger.error(f"Error during analysis of ticket {request.ticket_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal analysis pipeline error"
+            detail="Internal error while analyzing ticket."
         )

@@ -142,7 +142,7 @@ def decide_verdict(case_type: CaseType, matched_txn: Optional[Dict[str, Any]]) -
 
     return EvidenceVerdict.INSUFFICIENT_DATA
 
-def get_department(case_type: CaseType) -> Department:
+def get_department(case_type: CaseType, amount: Optional[float] = None, verdict: Optional[EvidenceVerdict] = None) -> Department:
     CASE_TO_DEPARTMENT = {
         CaseType.WRONG_TRANSFER: Department.DISPUTE_RESOLUTION,
         CaseType.PAYMENT_FAILED: Department.PAYMENTS_OPS,
@@ -153,6 +153,14 @@ def get_department(case_type: CaseType) -> Department:
         CaseType.PHISHING_OR_SOCIAL_ENGINEERING: Department.FRAUD_RISK,
         CaseType.OTHER: Department.CUSTOMER_SUPPORT
     }
+    
+    # Override for contested/high-risk refund requests
+    if case_type == CaseType.REFUND_REQUEST:
+        is_high_amount = amount is not None and amount >= 5000
+        is_contested = verdict == EvidenceVerdict.INCONSISTENT
+        if is_high_amount or is_contested:
+            return Department.DISPUTE_RESOLUTION
+            
     return CASE_TO_DEPARTMENT.get(case_type, Department.CUSTOMER_SUPPORT)
 
 def calculate_severity(case_type: CaseType, amount: Optional[float]) -> Severity:

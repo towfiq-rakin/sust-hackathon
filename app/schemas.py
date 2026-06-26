@@ -39,6 +39,7 @@ class TicketRequest(BaseModel):
     channel: Optional[str] = None
     user_type: Optional[str] = None
     campaign_context: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Metadata field")
 
 class TicketResponse(BaseModel):
     ticket_id: str
