@@ -73,7 +73,7 @@ def create_fallback_response(request: TicketRequest, rule_case: CaseType, matche
     signals = rules.extract_signals(request.complaint)
     amount = signals.get("amount")
     
-    severity = rules.calculate_severity(rule_case, amount)
+    severity = rules.calculate_severity(rule_case, amount, rule_verdict)
     department = rules.get_department(rule_case, amount, rule_verdict)
     
     # Construct strings
@@ -129,7 +129,7 @@ def analyze_ticket_flow(request: TicketRequest) -> TicketResponse:
     matched_txn = rules.match_transaction(signals, request.transaction_history)
     
     rule_case = rules.detect_case_type(request.complaint)
-    rule_verdict = rules.decide_verdict(rule_case, matched_txn)
+    rule_verdict = rules.decide_verdict(rule_case, matched_txn, request.transaction_history)
     
     # If Gemini is enabled, try AI path
     try:
@@ -169,7 +169,7 @@ def analyze_ticket_flow(request: TicketRequest) -> TicketResponse:
                 case_type = rule_case
                 
             # Enforce deterministic severity and department calculation
-            severity = rules.calculate_severity(case_type, signals.get("amount"))
+            severity = rules.calculate_severity(case_type, signals.get("amount"), evidence_verdict)
             department = rules.get_department(case_type, signals.get("amount"), evidence_verdict)
                 
             # Set relevant transaction ID (guarantee it exists in list or is matched)

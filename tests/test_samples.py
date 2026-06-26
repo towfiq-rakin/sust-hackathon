@@ -66,7 +66,7 @@ def test_payment_failed_inconsistent():
     data = response.json()
     assert data["case_type"] == CaseType.PAYMENT_FAILED
     assert data["evidence_verdict"] == EvidenceVerdict.INCONSISTENT
-    assert data["severity"] == Severity.HIGH
+    assert data["severity"] == Severity.MEDIUM
     assert data["department"] == Department.PAYMENTS_OPS
     assert data["human_review_required"] is True
 

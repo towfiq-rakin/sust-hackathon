@@ -47,26 +47,45 @@ def extract_signals(complaint: str) -> Dict[str, Any]:
 def detect_case_type(text: str) -> CaseType:
     t = text.lower()
 
-    if any(x in t for x in ["otp", "pin", "password", "scam", "fraud", "verification code", "suspicious call", "phishing"]):
+    if any(x in t for x in [
+        "otp", "pin", "password", "scam", "fraud", "verification code", "suspicious call", "phishing",
+        "code chaiche", "pin chaiche", "otp chaiche", "পিন", "ওটিপি", "পাসওয়ার্ড"
+    ]):
         return CaseType.PHISHING_OR_SOCIAL_ENGINEERING
 
-    if any(x in t for x in ["wrong number", "wrong recipient", "wrong account", "bhul number", "vul number", "wrong e pathaisi"]):
+    if any(x in t for x in [
+        "wrong number", "wrong recipient", "wrong account", "wrong person", "wrong transfer", "wrong send",
+        "bhul number", "vul number", "wrong e pathaisi", "bhul e", "vul e", "ভুল নাম্বার", "ভুল অ্যাকাউন্ট", "ভুল নম্বর", "ভুল এ"
+    ]):
         return CaseType.WRONG_TRANSFER
 
-    if any(x in t for x in ["failed", "deducted", "not successful", "payment hoy nai", "taka keteche", "fail hoise"]):
-        return CaseType.PAYMENT_FAILED
-
-    if any(x in t for x in ["refund", "money back", "return my money", "taka ferot", "refund chai"]):
-        return CaseType.REFUND_REQUEST
-
-    if any(x in t for x in ["twice", "duplicate", "double", "duibar", "2 bar", "double payment"]):
+    if any(x in t for x in [
+        "twice", "duplicate", "double", "duibar", "2 bar", "double payment", "double charged", "two times",
+        "দুইবার", "২ বার", "ডাবল"
+    ]):
         return CaseType.DUPLICATE_PAYMENT
 
-    if any(x in t for x in ["settlement", "merchant payment pending", "settlement pai nai"]):
+    if any(x in t for x in [
+        "settlement", "merchant payment pending", "settlement pai nai", "merchant settlement", "settlement pending",
+        "মার্চেন্ট পেমেন্ট", "মার্চেন্ট"
+    ]):
         return CaseType.MERCHANT_SETTLEMENT_DELAY
 
-    if any(x in t for x in ["cash in", "cash-in", "agent", "deposit not added", "cash in hoy nai"]):
+    if any(x in t for x in [
+        "cash in", "cash-in", "agent", "deposit not added", "cash in hoy nai", "এজেন্ট", "ক্যাশ ইন", "ক্যাশ-ইন"
+    ]):
         return CaseType.AGENT_CASH_IN_ISSUE
+
+    if any(x in t for x in [
+        "failed", "deducted", "not successful", "payment hoy nai", "taka keteche", "fail hoise", "balance deducted",
+        "ব্যালেন্স কেটেছে", "টাকা কেটেছে", "পেমেন্ট হয়নি", "ব্যালেন্স কেটে নিয়েছে", "ব্যালেন্স কেটে"
+    ]):
+        return CaseType.PAYMENT_FAILED
+
+    if any(x in t for x in [
+        "refund", "money back", "return my money", "taka ferot", "refund chai", "টাকা ফেরত", "ফেরত চাই"
+    ]):
+        return CaseType.REFUND_REQUEST
 
     return CaseType.OTHER
 
@@ -105,6 +124,12 @@ def match_transaction(complaint_signals: Dict[str, Any], transactions: List[Dict
         if score > best_score:
             best_score = score
             best_txn = txn
+        elif score == best_score and best_txn is not None:
+            # If scores are equal, prefer the later one in time (e.g. for duplicates)
+            best_time = best_txn.get("timestamp")
+            txn_time = txn.get("timestamp")
+            if txn_time and best_time and txn_time > best_time:
+                best_txn = txn
 
     # Standard threshold: a match is valid if it scores at least 40
     if best_score < 40:
@@ -112,7 +137,7 @@ def match_transaction(complaint_signals: Dict[str, Any], transactions: List[Dict
 
     return best_txn
 
-def decide_verdict(case_type: CaseType, matched_txn: Optional[Dict[str, Any]]) -> EvidenceVerdict:
+def decide_verdict(case_type: CaseType, matched_txn: Optional[Dict[str, Any]], history: List[Dict[str, Any]] = None) -> EvidenceVerdict:
     if not matched_txn:
         return EvidenceVerdict.INSUFFICIENT_DATA
 
@@ -122,6 +147,23 @@ def decide_verdict(case_type: CaseType, matched_txn: Optional[Dict[str, Any]]) -
     if case_type == CaseType.WRONG_TRANSFER:
         # Wrong transfer claim holds if a completed transfer/send transaction exists
         if status == "completed":
+            target_cp = matched_txn.get("counterparty") or matched_txn.get("recipient") or matched_txn.get("phone")
+            if target_cp and history:
+                clean_target = re.sub(r'\D', '', str(target_cp))
+                matched_id = matched_txn.get("transaction_id") or matched_txn.get("txn_id")
+                prior_count = 0
+                for txn in history:
+                    txn_id = txn.get("transaction_id") or txn.get("txn_id")
+                    if txn_id == matched_id:
+                        continue
+                    txn_cp = txn.get("counterparty") or txn.get("recipient") or txn.get("sender") or txn.get("phone")
+                    txn_status = (txn.get("status") or "").lower()
+                    if txn_cp and txn_status == "completed":
+                        clean_txn_cp = re.sub(r'\D', '', str(txn_cp))
+                        if clean_txn_cp == clean_target:
+                            prior_count += 1
+                if prior_count >= 1:
+                    return EvidenceVerdict.INCONSISTENT
             return EvidenceVerdict.CONSISTENT
         return EvidenceVerdict.INSUFFICIENT_DATA
 
@@ -138,6 +180,16 @@ def decide_verdict(case_type: CaseType, matched_txn: Optional[Dict[str, Any]]) -
         return EvidenceVerdict.CONSISTENT
 
     if case_type == CaseType.PHISHING_OR_SOCIAL_ENGINEERING:
+        return EvidenceVerdict.INSUFFICIENT_DATA
+
+    if case_type == CaseType.MERCHANT_SETTLEMENT_DELAY:
+        if status == "pending":
+            return EvidenceVerdict.CONSISTENT
+        return EvidenceVerdict.INSUFFICIENT_DATA
+
+    if case_type == CaseType.AGENT_CASH_IN_ISSUE:
+        if status in ["pending", "failed"]:
+            return EvidenceVerdict.CONSISTENT
         return EvidenceVerdict.INSUFFICIENT_DATA
 
     return EvidenceVerdict.INSUFFICIENT_DATA
@@ -163,28 +215,59 @@ def get_department(case_type: CaseType, amount: Optional[float] = None, verdict:
             
     return CASE_TO_DEPARTMENT.get(case_type, Department.CUSTOMER_SUPPORT)
 
-def calculate_severity(case_type: CaseType, amount: Optional[float]) -> Severity:
+def calculate_severity(case_type: CaseType, amount: Optional[float], verdict: EvidenceVerdict = EvidenceVerdict.INSUFFICIENT_DATA) -> Severity:
     if case_type == CaseType.PHISHING_OR_SOCIAL_ENGINEERING:
         return Severity.CRITICAL
-    
+
+    # Merchant settlement delay is always medium severity
+    if case_type == CaseType.MERCHANT_SETTLEMENT_DELAY:
+        return Severity.MEDIUM
+
+    # Agent cash-in issue is high severity if consistent (pending/failed)
+    if case_type == CaseType.AGENT_CASH_IN_ISSUE:
+        if verdict == EvidenceVerdict.CONSISTENT:
+            return Severity.HIGH
+        return Severity.MEDIUM
+
+    # If evidence is inconsistent or insufficient, wrong transfer, payment failed, and duplicate payment drop to medium
+    if verdict in [EvidenceVerdict.INCONSISTENT, EvidenceVerdict.INSUFFICIENT_DATA]:
+        if case_type in [CaseType.WRONG_TRANSFER, CaseType.PAYMENT_FAILED, CaseType.DUPLICATE_PAYMENT]:
+            return Severity.MEDIUM
+
+    # High amount triggers high severity for standard customer complaints
     if amount is not None and amount >= 5000:
-        return Severity.HIGH
+        if case_type in [CaseType.WRONG_TRANSFER, CaseType.PAYMENT_FAILED, CaseType.DUPLICATE_PAYMENT]:
+            return Severity.HIGH
 
     if case_type in [CaseType.WRONG_TRANSFER, CaseType.PAYMENT_FAILED, CaseType.DUPLICATE_PAYMENT]:
         return Severity.HIGH
 
-    if case_type in [CaseType.MERCHANT_SETTLEMENT_DELAY, CaseType.AGENT_CASH_IN_ISSUE, CaseType.OTHER]:
-        return Severity.MEDIUM
-
     return Severity.LOW
 
 def needs_human_review(case_type: CaseType, severity: Severity, verdict: EvidenceVerdict, confidence: float) -> bool:
-    if case_type in [CaseType.WRONG_TRANSFER, CaseType.PHISHING_OR_SOCIAL_ENGINEERING]:
+    # Phishing and wrong transfer (except when insufficient data / clarification request) always require review
+    if case_type == CaseType.PHISHING_OR_SOCIAL_ENGINEERING:
         return True
-    if severity in [Severity.HIGH, Severity.CRITICAL]:
+        
+    if case_type == CaseType.WRONG_TRANSFER:
+        if verdict != EvidenceVerdict.INSUFFICIENT_DATA:
+            return True
+        return False
+        
+    # Duplicate payments and agent cash-in issues require human review
+    if case_type in [CaseType.DUPLICATE_PAYMENT, CaseType.AGENT_CASH_IN_ISSUE]:
         return True
-    if verdict in [EvidenceVerdict.INCONSISTENT, EvidenceVerdict.INSUFFICIENT_DATA]:
+        
+    # High severity refund requests (e.g. override to dispute_resolution) require review
+    if case_type == CaseType.REFUND_REQUEST:
+        if severity in [Severity.HIGH, Severity.CRITICAL] or verdict == EvidenceVerdict.INCONSISTENT:
+            return True
+            
+    # Inconsistent evidence (contested cases) require review
+    if verdict == EvidenceVerdict.INCONSISTENT:
         return True
+        
     if confidence < 0.75:
         return True
+        
     return False
