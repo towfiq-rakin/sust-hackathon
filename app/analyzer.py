@@ -126,9 +126,8 @@ def analyze_ticket_flow(request: TicketRequest) -> TicketResponse:
     """
     # 1. First extract signals & run deterministic matching
     signals = rules.extract_signals(request.complaint)
-    matched_txn = rules.match_transaction(signals, request.transaction_history)
-    
     rule_case = rules.detect_case_type(request.complaint)
+    matched_txn = rules.match_transaction(signals, request.transaction_history, rule_case)
     rule_verdict = rules.decide_verdict(rule_case, matched_txn, request.transaction_history)
     
     # If Gemini is enabled, try AI path

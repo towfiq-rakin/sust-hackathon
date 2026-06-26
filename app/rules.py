@@ -87,25 +87,31 @@ def detect_case_type(text: str) -> CaseType:
     ]):
         return CaseType.REFUND_REQUEST
 
+    if any(x in t for x in [
+        "sent", "send", "transfer", "পাঠিয়েছি", "পাঠালাম", "পাঠায়", "পাঠাইছি", "send money"
+    ]):
+        return CaseType.WRONG_TRANSFER
+
     return CaseType.OTHER
 
-def match_transaction(complaint_signals: Dict[str, Any], transactions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    best_txn = None
-    best_score = 0
+def match_transaction(complaint_signals: Dict[str, Any], transactions: List[Dict[str, Any]], case_type: Optional[CaseType] = None) -> Optional[Dict[str, Any]]:
+    if not transactions:
+        return None
 
+    scored_txns = []
     for txn in transactions:
         score = 0
         
         # 1. Transaction ID matches exactly
         txn_id = txn.get("transaction_id") or txn.get("txn_id")
-        if txn_id and complaint_signals["mentioned_transaction_id"]:
+        if txn_id and complaint_signals.get("mentioned_transaction_id"):
             # Normalize and compare
             if str(txn_id).strip().upper() == str(complaint_signals["mentioned_transaction_id"]).strip().upper():
                 score += 100
         
         # 2. Amount matches
         txn_amount = txn.get("amount")
-        if txn_amount is not None and complaint_signals["amount"] is not None:
+        if txn_amount is not None and complaint_signals.get("amount") is not None:
             try:
                 if abs(float(txn_amount) - float(complaint_signals["amount"])) < 0.01:
                     score += 40
@@ -114,28 +120,37 @@ def match_transaction(complaint_signals: Dict[str, Any], transactions: List[Dict
         
         # 3. Counterparty matches
         counterparty = txn.get("counterparty") or txn.get("recipient") or txn.get("sender") or txn.get("phone")
-        if counterparty and complaint_signals["mentioned_phone"]:
+        if counterparty and complaint_signals.get("mentioned_phone"):
             # Check if mentioned phone matches or is a substring of counterparty
             clean_cp = re.sub(r'\D', '', str(counterparty))
             clean_mp = re.sub(r'\D', '', str(complaint_signals["mentioned_phone"]))
             if clean_mp in clean_cp or clean_cp in clean_mp:
                 score += 40
 
-        if score > best_score:
-            best_score = score
-            best_txn = txn
-        elif score == best_score and best_txn is not None:
-            # If scores are equal, prefer the later one in time (e.g. for duplicates)
-            best_time = best_txn.get("timestamp")
-            txn_time = txn.get("timestamp")
-            if txn_time and best_time and txn_time > best_time:
-                best_txn = txn
+        scored_txns.append((txn, score))
 
-    # Standard threshold: a match is valid if it scores at least 40
-    if best_score < 40:
+    if not scored_txns:
         return None
 
-    return best_txn
+    max_score = max(score for txn, score in scored_txns)
+    if max_score < 40:
+        return None
+
+    # Find all transactions with the max score
+    candidates = [txn for txn, score in scored_txns if score == max_score]
+
+    if len(candidates) > 1:
+        if case_type == CaseType.DUPLICATE_PAYMENT:
+            # Sort candidates by timestamp (prefer the later one)
+            def get_timestamp(t):
+                return t.get("timestamp") or ""
+            candidates.sort(key=get_timestamp)
+            return candidates[-1]
+        else:
+            # Ambiguous match, return None
+            return None
+
+    return candidates[0]
 
 def decide_verdict(case_type: CaseType, matched_txn: Optional[Dict[str, Any]], history: List[Dict[str, Any]] = None) -> EvidenceVerdict:
     if not matched_txn:
