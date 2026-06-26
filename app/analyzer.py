@@ -90,7 +90,7 @@ def create_fallback_response(request: TicketRequest, rule_case: CaseType, matche
     confidence = 0.50
     
     # Determine human review requirement
-    human_review = rules.needs_human_review(rule_case, severity, rule_verdict, confidence)
+    human_review = rules.needs_human_review(rule_case, severity, rule_verdict, confidence, amount)
     
     return TicketResponse(
         ticket_id=request.ticket_id,
@@ -160,6 +160,10 @@ def analyze_ticket_flow(request: TicketRequest) -> TicketResponse:
                 evidence_verdict = EvidenceVerdict(ai_data.get("evidence_verdict"))
             except ValueError:
                 evidence_verdict = rule_verdict
+            
+            # Enforce rule-based evidence verdict if it resolves to consistent or inconsistent
+            if rule_verdict in [EvidenceVerdict.CONSISTENT, EvidenceVerdict.INCONSISTENT]:
+                evidence_verdict = rule_verdict
                 
             # Case Type validation
             try:
@@ -202,7 +206,7 @@ def analyze_ticket_flow(request: TicketRequest) -> TicketResponse:
                 confidence = 0.85
                 
             # Force human review if safety was triggered or based on rules
-            human_review = rules.needs_human_review(case_type, severity, evidence_verdict, confidence)
+            human_review = rules.needs_human_review(case_type, severity, evidence_verdict, confidence, signals.get("amount"))
             if safety_triggered:
                 human_review = True
                 

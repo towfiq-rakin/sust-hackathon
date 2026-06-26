@@ -28,3 +28,23 @@ Tracked changes and updates made to QueueStorm Investigator.
 - **Dependencies**: Verified all package requirements are satisfied under the target Python environment.
 - **Testing**: Confirmed that `python -m pytest` executes and passes all test cases (22/22 passed, including health checks, schema limits, safety checkers, local functional samples, and official JSON case packs under fallback rules).
 
+---
+
+## 📅 June 26, 2026 (Vertex AI Migration)
+
+### Added
+- **[agent-studio-498807-a74af6d2c474.json](file:///home/rakin/Desktop/sust-hackathon/agent-studio-498807-a74af6d2c474.json)**: Added the service account credentials JSON to the project root directory.
+
+### Modified
+- **[.gitignore](file:///home/rakin/Desktop/sust-hackathon/.gitignore)**: Ignored `agent-studio-498807-a74af6d2c474.json` and general `*.json` key files to ensure credentials are never committed, while preserving required project JSON assets (`SUST_Preli_Sample_Cases.json`, `sample_output.json`, and `skills-lock.json`).
+- **[app/config.py](file:///home/rakin/Desktop/sust-hackathon/app/config.py)**: Added `USE_VERTEXAI`, `VERTEX_PROJECT_ID`, `VERTEX_LOCATION`, and `GOOGLE_APPLICATION_CREDENTIALS` settings. Changed the default `GEMINI_MODEL` to `gemini-2.5-flash`.
+- **[app/gemini_client.py](file:///home/rakin/Desktop/sust-hackathon/app/app/gemini_client.py)**: Refactored client initialization to build the Google Cloud Vertex AI client using the service account credentials pointed to by the `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
+- **[app/rules.py](file:///home/rakin/Desktop/sust-hackathon/app/rules.py)**: Updated `needs_human_review` to accept the transaction amount as an optional parameter and ensure that high-value refund requests (amount >= 5000) are correctly flagged as requiring human review, while preserving the severity settings of other case types.
+- **[app/analyzer.py](file:///home/rakin/Desktop/sust-hackathon/app/analyzer.py)**: Normalized `evidence_verdict` by forcing alignment with rule-based deterministic database verification whenever the status check produces a clear consistent or inconsistent result. Also passed the transaction amount parameter to `needs_human_review`.
+- **[.env]** & **[.env.example]**: Removed `GEMINI_API_KEY` and updated variables template to configure Google Application credentials, project ID, location, and model parameters.
+- **[README.md](file:///home/rakin/Desktop/sust-hackathon/README.md)** & **[RUNBOOK.md](file:///home/rakin/Desktop/sust-hackathon/RUNBOOK.md)**: Updated technical description, environmental documentation, architecture flowchart, Docker volume-mount examples, and Vertex AI API troubleshooting guidelines.
+
+### Verified
+- **Vertex AI Client Connectivity**: Verified integration with `us-central1` Vertex API gateway and successful generation of content using `gemini-2.5-flash`.
+- **Testing**: Confirmed that `python3 -m pytest` executes and successfully passes all 22 test cases under the live Vertex AI client configuration.
+

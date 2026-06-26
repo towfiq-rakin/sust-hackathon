@@ -150,3 +150,11 @@ cython_debug/
 .idea/
 *.swp
 *.swo
+
+# Service accounts / credentials
+agent-studio-498807-a74af6d2c474.json
+agent-studio-*.json
+*.json
+!SUST_Preli_Sample_Cases.json
+!sample_output.json
+!skills-lock.json

@@ -1,4 +1,5 @@
 import json
+import os
 import logging
 from typing import Dict, Any, Optional
 from app.config import settings
@@ -24,20 +25,37 @@ except ImportError:
 
 def call_gemini_api(prompt: str) -> Optional[str]:
     """
-    Calls the Gemini API using available SDK and settings, enforcing JSON response.
+    Calls the Gemini API (Vertex AI or Developer API) using available SDK and settings, enforcing JSON response.
     """
-    if not settings.GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY is not set. Skipping API call.")
-        return None
-
     if not settings.USE_GEMINI:
         logger.info("USE_GEMINI is set to false. Skipping API call.")
         return None
 
     try:
         if NEW_SDK_AVAILABLE:
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            # Use gemini-2.5-flash or configured model
+            if settings.USE_VERTEXAI:
+                # Resolve service account credentials JSON file to absolute path if needed
+                creds_path = settings.GOOGLE_APPLICATION_CREDENTIALS
+                if creds_path:
+                    if not os.path.isabs(creds_path):
+                        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                        creds_path = os.path.abspath(os.path.join(project_root, creds_path))
+                    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+                    logger.info(f"Using Vertex AI with credentials from: {creds_path}")
+                else:
+                    logger.info("Using Vertex AI with environment-provided credentials")
+
+                client = genai.Client(
+                    vertexai=True,
+                    project=settings.VERTEX_PROJECT_ID,
+                    location=settings.VERTEX_LOCATION
+                )
+            else:
+                if not settings.GEMINI_API_KEY:
+                    logger.warning("GEMINI_API_KEY is not set and Vertex AI is disabled. Skipping API call.")
+                    return None
+                client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
             config = types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.1
@@ -50,6 +68,14 @@ def call_gemini_api(prompt: str) -> Optional[str]:
             return response.text
 
         elif LEGACY_SDK_AVAILABLE:
+            if settings.USE_VERTEXAI:
+                logger.error("Legacy google-generativeai SDK does not support Vertex AI client configuration.")
+                return None
+            
+            if not settings.GEMINI_API_KEY:
+                logger.warning("GEMINI_API_KEY is not set. Skipping API call.")
+                return None
+
             genai_legacy.configure(api_key=settings.GEMINI_API_KEY)
             model = genai_legacy.GenerativeModel(settings.GEMINI_MODEL)
             generation_config = {

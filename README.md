@@ -23,7 +23,7 @@ The system utilizes a dual-engine architecture: a deterministic rules-based engi
 - **Core Framework**: FastAPI, Python 3.11+
 - **Validation**: Pydantic v2
 - **Server**: Uvicorn
-- **AI Integration**: Gemini API (supporting new `google-genai` and legacy `google-generativeai` SDKs)
+- **AI Integration**: Google Cloud Vertex AI (unified `google-genai` SDK with Service Account JSON authentication)
 - **Environment Management**: python-dotenv
 - **Testing**: pytest
 
@@ -39,10 +39,13 @@ cp .env.example .env
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `GEMINI_API_KEY` | Google Gemini API Key | Required for AI engine |
-| `GEMINI_MODEL` | Gemini Model to target | `gemini-1.5-flash` |
+| `GEMINI_MODEL` | Gemini Model to target in Vertex AI | `gemini-2.5-pro` |
 | `GEMINI_TIMEOUT_SECONDS` | Timeout duration for LLM calls | `12` |
 | `USE_GEMINI` | Feature flag to enable/disable AI reasoning | `true` |
+| `USE_VERTEXAI` | Feature flag to use Vertex AI client model backend | `true` |
+| `VERTEX_PROJECT_ID` | Google Cloud project ID for Vertex AI client | `agent-studio-498807` |
+| `VERTEX_LOCATION` | Region location for Vertex AI resource calls | `us-central1` |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON credentials | `agent-studio-498807-a74af6d2c474.json` |
 
 ---
 
@@ -134,8 +137,8 @@ graph TD
     A[Incoming TicketRequest] --> B[Signal Extraction - Regex]
     B --> C[Transaction Matching - Scoring]
     C --> D[Deterministic Case Detection & Rule Verdict]
-    D --> E{USE_GEMINI & API Key Set?}
-    E -- Yes --> F[Call Gemini API - JSON Output]
+    D --> E{USE_GEMINI & Credentials Set?}
+    E -- Yes --> F[Call Vertex AI API - JSON Output]
     F --> G[Parse JSON & Normalize Enums]
     G --> H[Enforce Deterministic Rules & Thresholds]
     H --> I[Apply Safety Sanitizer to Customer Reply]
@@ -169,11 +172,11 @@ To prevent prompt injections and ensure compliance:
 
 ---
 
-## 🤖 Models
+## MODELS
 
-This project uses the Gemini API for multilingual complaint understanding, evidence reasoning assistance, and response drafting.
+This project uses the Gemini API (via Vertex AI) for multilingual complaint understanding, evidence reasoning assistance, and response drafting.
 
-Model name is configured through the `GEMINI_MODEL` environment variable. The recommended default is `gemini-1.5-flash` because it is fast and suitable for short structured JSON analysis.
+Model name is configured through the `GEMINI_MODEL` environment variable. The recommended default is `gemini-2.5-pro` because it is highly capable at complex reasoning, multi-turn instruction following, and short structured JSON analysis.
 
 The system does not rely only on Gemini. A deterministic rule-based fallback handles classification, transaction matching, evidence verdicts, and safe response generation if Gemini is unavailable or returns invalid output.
 

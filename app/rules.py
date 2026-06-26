@@ -259,7 +259,7 @@ def calculate_severity(case_type: CaseType, amount: Optional[float], verdict: Ev
 
     return Severity.LOW
 
-def needs_human_review(case_type: CaseType, severity: Severity, verdict: EvidenceVerdict, confidence: float) -> bool:
+def needs_human_review(case_type: CaseType, severity: Severity, verdict: EvidenceVerdict, confidence: float, amount: Optional[float] = None) -> bool:
     # Phishing and wrong transfer (except when insufficient data / clarification request) always require review
     if case_type == CaseType.PHISHING_OR_SOCIAL_ENGINEERING:
         return True
@@ -275,7 +275,7 @@ def needs_human_review(case_type: CaseType, severity: Severity, verdict: Evidenc
         
     # High severity refund requests (e.g. override to dispute_resolution) require review
     if case_type == CaseType.REFUND_REQUEST:
-        if severity in [Severity.HIGH, Severity.CRITICAL] or verdict == EvidenceVerdict.INCONSISTENT:
+        if severity in [Severity.HIGH, Severity.CRITICAL] or verdict == EvidenceVerdict.INCONSISTENT or (amount is not None and amount >= 5000):
             return True
             
     # Inconsistent evidence (contested cases) require review
