@@ -15,9 +15,16 @@ SENSITIVE_INFO_PATTERNS = [
 # Phrases that are explicitly forbidden (e.g. prompt injection successes or bad promises)
 FORBIDDEN_PHRASES = [
     "we will refund you",
+    "we have refunded",
+    "refund confirmed",
+    "refund is confirmed",
     "your money has been reversed",
     "your account has been recovered",
     "we have unblocked your account",
+    "we have reversed",
+    "amount has been refunded",
+    "amount will be automatically refunded",
+    "will be reversed back",
     "contact this number"
 ]
 
@@ -86,3 +93,45 @@ def sanitize_customer_reply(customer_reply: str) -> str:
         return SAFE_DEFAULT_REPLY
         
     return customer_reply
+
+
+# Forbidden phrases specific to recommended_next_action
+ACTION_FORBIDDEN_PHRASES = [
+    "confirm refund to customer",
+    "tell customer refund is confirmed",
+    "promise refund",
+    "promise reversal",
+    "inform customer money returned",
+    "share otp",
+    "ask for pin",
+    "ask for otp",
+    "ask for password",
+    "request customer pin",
+    "request customer otp",
+]
+
+SAFE_DEFAULT_ACTION = (
+    "Review the ticket manually and verify relevant transaction records "
+    "through internal tools before taking any action."
+)
+
+def sanitize_next_action(next_action: str) -> str:
+    """
+    Validates recommended_next_action. Replaces with safe default if it
+    contains forbidden phrases (refund promises, credential requests).
+    """
+    if not next_action or not next_action.strip():
+        return SAFE_DEFAULT_ACTION
+    
+    action_lower = next_action.lower()
+    
+    for phrase in ACTION_FORBIDDEN_PHRASES:
+        if phrase in action_lower:
+            return SAFE_DEFAULT_ACTION
+    
+    # Also check for direct refund/reversal promises in action text
+    for phrase in FORBIDDEN_PHRASES:
+        if phrase in action_lower:
+            return SAFE_DEFAULT_ACTION
+    
+    return next_action

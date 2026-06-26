@@ -20,16 +20,18 @@ def generate_rule_based_reply(case_type: CaseType, ticket_id: str) -> str:
             "Our dispute resolution team is investigating the target account and transaction status."
         ),
         CaseType.PAYMENT_FAILED: (
-            "We are reviewing your failed payment request. If your balance was deducted, the amount will be "
-            "automatically refunded within 72 hours. Do not share your PIN, OTP, or passwords."
+            "We have noted your concern about this payment. Please do not share your PIN, OTP, password, "
+            "or sensitive account information with anyone. Our team will review the payment status through "
+            "official channels. If any amount is found eligible after review, it will be handled accordingly."
         ),
         CaseType.REFUND_REQUEST: (
             "We have received your refund request. Our support team will verify the details with the merchant "
             "and update you shortly. Please keep your account details secure."
         ),
         CaseType.DUPLICATE_PAYMENT: (
-            "We have noted your concern regarding double payment. If you were charged twice for the transaction, "
-            "the duplicate amount will be reversed back to your account after verification."
+            "We have noted your concern regarding a possible double charge. Please do not share your PIN, OTP, "
+            "or password with anyone. Our payments team will review the transaction records through official "
+            "channels and update you on the outcome."
         ),
         CaseType.MERCHANT_SETTLEMENT_DELAY: (
             "We are investigating the merchant settlement delay. Our operations team is processing pending payouts "
@@ -190,6 +192,10 @@ def analyze_ticket_flow(request: TicketRequest) -> TicketResponse:
             customer_reply = str(ai_data.get("customer_reply", ""))
             sanitized_reply = safety.sanitize_customer_reply(customer_reply)
             
+            # Also sanitize recommended_next_action (problem statement checks this field too)
+            raw_next_action = str(ai_data.get("recommended_next_action", "Manual ticket review"))
+            sanitized_next_action = safety.sanitize_next_action(raw_next_action)
+            
             # If safety rules altered the reply, flag it
             safety_triggered = (customer_reply != sanitized_reply)
             
@@ -199,9 +205,10 @@ def analyze_ticket_flow(request: TicketRequest) -> TicketResponse:
             if safety_triggered:
                 reason_codes.append("safety_sanitizer_triggered")
                 
-            # Confidence normalizer
+            # Confidence normalizer — clamp to [0, 1]
             try:
                 confidence = float(ai_data.get("confidence", 0.9))
+                confidence = max(0.0, min(1.0, confidence))
             except (ValueError, TypeError):
                 confidence = 0.85
                 
@@ -218,7 +225,7 @@ def analyze_ticket_flow(request: TicketRequest) -> TicketResponse:
                 severity=severity,
                 department=department,
                 agent_summary=str(ai_data.get("agent_summary", f"Gemini analyzed ticket {request.ticket_id}")),
-                recommended_next_action=str(ai_data.get("recommended_next_action", "Manual ticket review")),
+                recommended_next_action=sanitized_next_action,
                 customer_reply=sanitized_reply,
                 human_review_required=human_review,
                 confidence=confidence,

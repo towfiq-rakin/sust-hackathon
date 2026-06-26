@@ -87,8 +87,11 @@ def detect_case_type(text: str) -> CaseType:
     ]):
         return CaseType.REFUND_REQUEST
 
+    # Catch transfer complaints with contextual clues (not bare "sent" alone)
     if any(x in t for x in [
-        "sent", "send", "transfer", "পাঠিয়েছি", "পাঠালাম", "পাঠায়", "পাঠাইছি", "send money"
+        "পাঠিয়েছি", "পাঠালাম", "পাঠায়", "পাঠাইছি", "send money",
+        "sent money", "didn't get it", "not received", "didn't receive",
+        "he says he didn't get", "she says she didn't get"
     ]):
         return CaseType.WRONG_TRANSFER
 
@@ -147,7 +150,7 @@ def match_transaction(complaint_signals: Dict[str, Any], transactions: List[Dict
             candidates.sort(key=get_timestamp)
             return candidates[-1]
         else:
-            # Ambiguous match, return None
+            # Ambiguous match — cannot determine which transaction the complaint refers to
             return None
 
     return candidates[0]
@@ -192,7 +195,22 @@ def decide_verdict(case_type: CaseType, matched_txn: Optional[Dict[str, Any]], h
         return EvidenceVerdict.CONSISTENT
 
     if case_type == CaseType.DUPLICATE_PAYMENT:
-        return EvidenceVerdict.CONSISTENT
+        # Check if there are actually 2+ similar transactions in history
+        if matched_txn and history:
+            matched_amount = matched_txn.get("amount")
+            matched_type = (matched_txn.get("type") or "").lower()
+            similar_count = 0
+            for txn in history:
+                txn_amount = txn.get("amount")
+                txn_type = (txn.get("type") or "").lower()
+                txn_status = (txn.get("status") or "").lower()
+                if txn_amount == matched_amount and txn_type == matched_type and txn_status == "completed":
+                    similar_count += 1
+            if similar_count >= 2:
+                return EvidenceVerdict.CONSISTENT
+            else:
+                return EvidenceVerdict.INSUFFICIENT_DATA
+        return EvidenceVerdict.INSUFFICIENT_DATA
 
     if case_type == CaseType.PHISHING_OR_SOCIAL_ENGINEERING:
         return EvidenceVerdict.INSUFFICIENT_DATA

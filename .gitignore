@@ -155,6 +155,8 @@ cython_debug/
 agent-studio-498807-a74af6d2c474.json
 agent-studio-*.json
 *.json
-!SUST_Preli_Sample_Cases.json
-!sample_output.json
-!skills-lock.json
+agent.md
+project-update.md
+sample_output.json
+skills-lock.json
+SUST_Preli_Sample_Cases.json
