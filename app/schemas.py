@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from enum import Enum
 from pydantic import BaseModel, Field
 
@@ -38,7 +38,8 @@ class TicketRequest(BaseModel):
     language: Optional[str] = None
     channel: Optional[str] = None
     user_type: Optional[str] = None
-    campaign_context: Optional[Dict[str, Any]] = None
+    campaign_context: Optional[Union[str, Dict[str, Any]]] = None
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Metadata field")
 
 class TicketResponse(BaseModel):
     ticket_id: str
@@ -53,3 +54,7 @@ class TicketResponse(BaseModel):
     human_review_required: bool
     confidence: float
     reason_codes: List[str]
+
+
+AnalyzeRequest = TicketRequest
+AnalyzeResponse = TicketResponse

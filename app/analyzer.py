@@ -1,239 +1,243 @@
 import json
 import logging
-from typing import Dict, Any, Optional, List
-from app.schemas import (
-    TicketRequest, TicketResponse, EvidenceVerdict, CaseType, Severity, Department
-)
-from app import rules
-from app import safety
-from app.gemini_client import call_gemini_api, build_prompt
+from typing import Any, Dict, List, Optional
+
+from app import rules, safety
+from app.gemini_client import build_prompt, call_gemini_api
+from app.schemas import CaseType, Department, EvidenceVerdict, Severity, TicketRequest, TicketResponse
 
 logger = logging.getLogger(__name__)
 
-def generate_rule_based_reply(case_type: CaseType, ticket_id: str) -> str:
-    """
-    Generates a type-specific safe customer reply.
-    """
-    replies = {
-        CaseType.WRONG_TRANSFER: (
-            "We have noted your wrong transfer concern. Please do not share your PIN, OTP, or password with anyone. "
-            "Our dispute resolution team is investigating the target account and transaction status."
-        ),
-        CaseType.PAYMENT_FAILED: (
-            "We are reviewing your failed payment request. If your balance was deducted, the amount will be "
-            "automatically refunded within 72 hours. Do not share your PIN, OTP, or passwords."
-        ),
-        CaseType.REFUND_REQUEST: (
-            "We have received your refund request. Our support team will verify the details with the merchant "
-            "and update you shortly. Please keep your account details secure."
-        ),
-        CaseType.DUPLICATE_PAYMENT: (
-            "We have noted your concern regarding double payment. If you were charged twice for the transaction, "
-            "the duplicate amount will be reversed back to your account after verification."
-        ),
-        CaseType.MERCHANT_SETTLEMENT_DELAY: (
-            "We are investigating the merchant settlement delay. Our operations team is processing pending payouts "
-            "and will coordinate with you. Please do not share sensitive credentials."
-        ),
-        CaseType.AGENT_CASH_IN_ISSUE: (
-            "We have received your complaint regarding agent cash-in. We are verifying the deposit ledger with the agent "
-            "to credit the amount. Please stay secure."
-        ),
-        CaseType.PHISHING_OR_SOCIAL_ENGINEERING: (
-            "IMPORTANT: We will never ask for your PIN, OTP, or password. Your fraud report has been escalated "
-            "to our fraud and risk team immediately. Please secure your account credentials."
-        ),
-        CaseType.OTHER: safety.SAFE_DEFAULT_REPLY
-    }
-    return replies.get(case_type, safety.SAFE_DEFAULT_REPLY)
 
-def generate_rule_based_action(case_type: CaseType) -> str:
-    """
-    Generates a type-specific next action for the support agent.
-    """
+def _matched_transaction_id(matched_txn: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not matched_txn:
+        return None
+    txn_id = matched_txn.get("transaction_id") or matched_txn.get("txn_id")
+    return str(txn_id) if txn_id else None
+
+
+def _default_summary(case_type: CaseType, verdict: EvidenceVerdict, matched_txn_id: Optional[str]) -> str:
+    base = {
+        CaseType.WRONG_TRANSFER: "Customer reports sending money to a wrong recipient.",
+        CaseType.PAYMENT_FAILED: "Customer reports a failed payment or deducted balance.",
+        CaseType.REFUND_REQUEST: "Customer requests a refund related to a prior transaction.",
+        CaseType.DUPLICATE_PAYMENT: "Customer reports a possible duplicate payment.",
+        CaseType.MERCHANT_SETTLEMENT_DELAY: "Customer reports a merchant settlement delay.",
+        CaseType.AGENT_CASH_IN_ISSUE: "Customer reports an agent cash-in issue.",
+        CaseType.PHISHING_OR_SOCIAL_ENGINEERING: "Customer reports suspicious contact or a request for sensitive credentials.",
+        CaseType.OTHER: "Customer submitted a complaint that requires manual review.",
+    }[case_type]
+    if matched_txn_id:
+        return f"{base} Matched transaction: {matched_txn_id}. Evidence verdict: {verdict.value}."
+    return f"{base} Evidence verdict: {verdict.value}."
+
+
+def _default_action(case_type: CaseType, matched_txn_id: Optional[str]) -> str:
+    txn_part = f" transaction {matched_txn_id}" if matched_txn_id else " matched records"
     actions = {
-        CaseType.WRONG_TRANSFER: "Verify wrong transfer details and escalate to dispute resolution for holding/reversal.",
-        CaseType.PAYMENT_FAILED: "Check gateway settlement status for matching transaction and initiate refund if balance deducted.",
-        CaseType.REFUND_REQUEST: "Verify refund request details and coordinate merchant guidelines compliance.",
-        CaseType.DUPLICATE_PAYMENT: "Check transaction history for double debit and process reversal.",
-        CaseType.MERCHANT_SETTLEMENT_DELAY: "Verify merchant settlement reports and process pending payouts.",
-        CaseType.AGENT_CASH_IN_ISSUE: "Validate agent deposit details and update user ledger.",
-        CaseType.PHISHING_OR_SOCIAL_ENGINEERING: "Flag customer account, suspend target fraud account if internal, and escalate to fraud team.",
-        CaseType.OTHER: "Review ticket details manually and route appropriately."
+        CaseType.WRONG_TRANSFER: f"Escalate to dispute resolution and verify{txn_part} through internal records before taking any action.",
+        CaseType.PAYMENT_FAILED: f"Verify{txn_part} status and check whether balance deduction and reversal records exist in internal systems.",
+        CaseType.REFUND_REQUEST: f"Review{txn_part} and confirm refund eligibility under internal policy before any customer commitment.",
+        CaseType.DUPLICATE_PAYMENT: f"Review{txn_part} and confirm whether duplicate debit occurred before any reversal step.",
+        CaseType.MERCHANT_SETTLEMENT_DELAY: f"Review{txn_part} and merchant settlement ledger, then route to merchant operations for follow-up.",
+        CaseType.AGENT_CASH_IN_ISSUE: f"Review{txn_part} and agent ledger entries, then route to agent operations for reconciliation.",
+        CaseType.PHISHING_OR_SOCIAL_ENGINEERING: "Escalate to fraud risk, advise the customer not to share credentials, and review for suspicious activity.",
+        CaseType.OTHER: "Review the ticket manually and verify relevant transaction records through internal tools.",
     }
-    return actions.get(case_type, "Review ticket details manually and route appropriately.")
+    return actions[case_type]
 
-def create_fallback_response(request: TicketRequest, rule_case: CaseType, matched_txn: Optional[Dict[str, Any]], rule_verdict: EvidenceVerdict, reason: str) -> TicketResponse:
-    """
-    Constructs a valid, safe fallback response using deterministic rules.
-    """
-    logger.info(f"Generating fallback response for ticket {request.ticket_id} due to: {reason}")
-    
-    # Extract values using rules
-    signals = rules.extract_signals(request.complaint)
-    amount = signals.get("amount")
-    
-    severity = rules.calculate_severity(rule_case, amount)
-    department = rules.get_department(rule_case)
-    
-    # Construct strings
-    relevant_txn_id = matched_txn.get("transaction_id") or matched_txn.get("txn_id") if matched_txn else None
-    
-    agent_summary = f"Customer submitted ticket reporting {rule_case.value.replace('_', ' ')}."
-    if relevant_txn_id:
-        agent_summary += f" Matched with transaction {relevant_txn_id}."
-        
-    next_action = generate_rule_based_action(rule_case)
-    customer_reply = safety.sanitize_customer_reply(generate_rule_based_reply(rule_case, request.ticket_id))
-    
-    # Fallback response has a baseline confidence
-    confidence = 0.50
-    
-    # Determine human review requirement
-    human_review = rules.needs_human_review(rule_case, severity, rule_verdict, confidence)
-    
-    return TicketResponse(
-        ticket_id=request.ticket_id,
-        relevant_transaction_id=str(relevant_txn_id) if relevant_txn_id else None,
-        evidence_verdict=rule_verdict,
-        case_type=rule_case,
-        severity=severity,
-        department=department,
-        agent_summary=agent_summary,
-        recommended_next_action=next_action,
-        customer_reply=customer_reply,
-        human_review_required=human_review,
-        confidence=confidence,
-        reason_codes=["fallback_used", reason]
-    )
+
+def _default_customer_reply(case_type: CaseType) -> str:
+    replies = {
+        CaseType.WRONG_TRANSFER: "We have noted your concern about this transfer. Please do not share your PIN, OTP, password, or sensitive account information with anyone. Our team will review the issue through official channels.",
+        CaseType.PAYMENT_FAILED: "We have noted your concern about this payment. Please do not share your PIN, OTP, password, or sensitive account information with anyone. Our team will review the payment status through official channels.",
+        CaseType.REFUND_REQUEST: "We have noted your refund concern. Please do not share your PIN, OTP, password, or sensitive account information with anyone. Our team will review the issue through official channels.",
+        CaseType.DUPLICATE_PAYMENT: "We have noted your concern about this payment. Please do not share your PIN, OTP, password, or sensitive account information with anyone. Our team will review the issue through official channels.",
+        CaseType.MERCHANT_SETTLEMENT_DELAY: "We have noted your settlement concern. Please do not share your PIN, OTP, password, or sensitive account information with anyone. Our team will review the issue through official channels.",
+        CaseType.AGENT_CASH_IN_ISSUE: "We have noted your cash-in concern. Please do not share your PIN, OTP, password, or sensitive account information with anyone. Our team will review the issue through official channels.",
+        CaseType.PHISHING_OR_SOCIAL_ENGINEERING: "This may be a suspicious request. Please do not share your PIN, OTP, password, verification code, or sensitive account information with anyone. Only use official support channels for assistance.",
+        CaseType.OTHER: safety.SAFE_DEFAULT_REPLY,
+    }
+    return replies[case_type]
+
 
 def clean_json_text(text: str) -> str:
-    """
-    Cleans up common markdown wraps or surrounding garbage from Gemini response.
-    """
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    if text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    return text.strip()
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    return cleaned.strip()
 
-def analyze_ticket_flow(request: TicketRequest) -> TicketResponse:
-    """
-    Main entry point for analyzing a ticket.
-    """
-    # 1. First extract signals & run deterministic matching
-    signals = rules.extract_signals(request.complaint)
-    matched_txn = rules.match_transaction(signals, request.transaction_history)
-    
-    rule_case = rules.detect_case_type(request.complaint)
-    rule_verdict = rules.decide_verdict(rule_case, matched_txn)
-    
-    # If Gemini is enabled, try AI path
+
+def create_fallback_response(
+    request: TicketRequest,
+    case_type: CaseType,
+    matched_txn: Optional[Dict[str, Any]],
+    verdict: EvidenceVerdict,
+    signals: Dict[str, Any],
+    reason: str,
+) -> TicketResponse:
+    matched_txn_id = _matched_transaction_id(matched_txn)
+    amount = signals.get("amount")
+    severity = rules.calculate_severity(case_type, amount, verdict)
+    department = rules.get_department(case_type, amount, verdict)
+    confidence = 0.5 if verdict == EvidenceVerdict.INSUFFICIENT_DATA else 0.82
+    human_review = rules.needs_human_review(case_type, severity, verdict, confidence, amount)
+
+    reason_codes = rules.build_reason_codes(case_type, verdict, matched_txn, signals)
+    reason_codes.insert(0, "fallback_used")
+    reason_codes.append(reason)
+
+    return TicketResponse(
+        ticket_id=request.ticket_id,
+        relevant_transaction_id=matched_txn_id,
+        evidence_verdict=verdict,
+        case_type=case_type,
+        severity=severity,
+        department=department,
+        agent_summary=_default_summary(case_type, verdict, matched_txn_id),
+        recommended_next_action=_default_action(case_type, matched_txn_id),
+        customer_reply=safety.sanitize_customer_reply(_default_customer_reply(case_type)),
+        human_review_required=human_review,
+        confidence=max(0.0, min(confidence, 1.0)),
+        reason_codes=reason_codes,
+    )
+
+
+def _valid_transaction_id(txn_id: Any, transaction_history: List[Dict[str, Any]]) -> Optional[str]:
+    if txn_id is None:
+        return None
+    normalized = str(txn_id)
+    valid_ids = {
+        str(txn.get("transaction_id") or txn.get("txn_id"))
+        for txn in transaction_history
+        if txn.get("transaction_id") or txn.get("txn_id")
+    }
+    return normalized if normalized in valid_ids else None
+
+
+def _coerce_enum(enum_cls: Any, value: Any, fallback: Any) -> Any:
     try:
-        # Construct input payload json for Gemini prompt
-        payload = {
-            "ticket_id": request.ticket_id,
-            "complaint": request.complaint,
-            "language": request.language,
-            "channel": request.channel,
-            "user_type": request.user_type,
-            "extracted_signals": signals,
-            "matched_transaction": matched_txn,
-            "transaction_history": request.transaction_history
-        }
-        payload_str = json.dumps(payload, indent=2, default=str)
-        prompt = build_prompt(payload_str)
-        
-        # Call API
-        ai_raw_response = call_gemini_api(prompt)
-        
-        if ai_raw_response:
-            # Parse response
-            cleaned_response = clean_json_text(ai_raw_response)
-            ai_data = json.loads(cleaned_response)
-            
-            # 2. Normalize and validate enums
-            # Evidence Verdict validation
-            try:
-                evidence_verdict = EvidenceVerdict(ai_data.get("evidence_verdict"))
-            except ValueError:
-                evidence_verdict = rule_verdict
-                
-            # Case Type validation
-            try:
-                case_type = CaseType(ai_data.get("case_type"))
-            except ValueError:
-                case_type = rule_case
-                
-            # Severity validation
-            try:
-                severity = Severity(ai_data.get("severity"))
-            except ValueError:
-                severity = rules.calculate_severity(case_type, signals.get("amount"))
-                
-            # Department validation
-            try:
-                department = Department(ai_data.get("department"))
-            except ValueError:
-                department = rules.get_department(case_type)
-                
-            # Set relevant transaction ID (guarantee it exists in list or is matched)
-            relevant_txn_id = ai_data.get("relevant_transaction_id")
-            if relevant_txn_id:
-                # Check if it exists in history
-                txn_ids = [str(txn.get("transaction_id") or txn.get("txn_id")) for txn in request.transaction_history]
-                if str(relevant_txn_id) not in txn_ids:
-                    # Fallback to matched txn if Gemini selected an invalid txn ID
-                    relevant_txn_id = matched_txn.get("transaction_id") or matched_txn.get("txn_id") if matched_txn else None
-            else:
-                relevant_txn_id = matched_txn.get("transaction_id") or matched_txn.get("txn_id") if matched_txn else None
+        return enum_cls(value)
+    except (TypeError, ValueError):
+        return fallback
 
-            # 3. Apply safety checker
-            customer_reply = str(ai_data.get("customer_reply", ""))
-            sanitized_reply = safety.sanitize_customer_reply(customer_reply)
-            
-            # If safety rules altered the reply, flag it
-            safety_triggered = (customer_reply != sanitized_reply)
-            
-            # Reason codes normalization
-            raw_codes = ai_data.get("reason_codes", [])
-            reason_codes = [str(code) for code in raw_codes] if isinstance(raw_codes, list) else ["ai_reasoning"]
-            if safety_triggered:
-                reason_codes.append("safety_sanitizer_triggered")
-                
-            # Confidence normalizer
-            try:
-                confidence = float(ai_data.get("confidence", 0.9))
-            except (ValueError, TypeError):
-                confidence = 0.85
-                
-            # Force human review if safety was triggered or based on rules
-            human_review = rules.needs_human_review(case_type, severity, evidence_verdict, confidence)
-            if safety_triggered:
-                human_review = True
-                
-            return TicketResponse(
-                ticket_id=request.ticket_id,
-                relevant_transaction_id=str(relevant_txn_id) if relevant_txn_id else None,
-                evidence_verdict=evidence_verdict,
-                case_type=case_type,
-                severity=severity,
-                department=department,
-                agent_summary=str(ai_data.get("agent_summary", f"Gemini analyzed ticket {request.ticket_id}")),
-                recommended_next_action=str(ai_data.get("recommended_next_action", "Manual ticket review")),
-                customer_reply=sanitized_reply,
-                human_review_required=human_review,
-                confidence=confidence,
-                reason_codes=reason_codes
-            )
-            
-    except Exception as e:
-        logger.error(f"Error parsing Gemini response or executing analyzer: {e}", exc_info=True)
-        # Fall through to fallback engine
-        return create_fallback_response(request, rule_case, matched_txn, rule_verdict, "gemini_parsing_error")
 
-    # If Gemini returned None or empty or disabled
-    return create_fallback_response(request, rule_case, matched_txn, rule_verdict, "gemini_api_skipped")
+def _normalize_ai_response(
+    ai_data: Dict[str, Any],
+    request: TicketRequest,
+    signals: Dict[str, Any],
+    matched_txn: Optional[Dict[str, Any]],
+    rule_case: CaseType,
+    rule_verdict: EvidenceVerdict,
+) -> TicketResponse:
+    case_type = _coerce_enum(CaseType, ai_data.get("case_type"), rule_case)
+    evidence_verdict = _coerce_enum(EvidenceVerdict, ai_data.get("evidence_verdict"), rule_verdict)
+    amount = signals.get("amount")
+    severity = rules.calculate_severity(case_type, amount, evidence_verdict)
+    department = rules.get_department(case_type, amount, evidence_verdict)
+
+    relevant_transaction_id = _valid_transaction_id(
+        ai_data.get("relevant_transaction_id"), request.transaction_history
+    ) or _matched_transaction_id(matched_txn)
+
+    try:
+        confidence = float(ai_data.get("confidence", 0.85))
+    except (TypeError, ValueError):
+        confidence = 0.85
+    confidence = max(0.0, min(confidence, 1.0))
+
+    raw_codes = ai_data.get("reason_codes")
+    if isinstance(raw_codes, list):
+        reason_codes = [str(code) for code in raw_codes if str(code).strip()]
+    else:
+        reason_codes = []
+    if not reason_codes:
+        reason_codes = rules.build_reason_codes(case_type, evidence_verdict, matched_txn, signals)
+    reason_codes.append("gemini_used")
+
+    customer_reply = safety.sanitize_customer_reply(str(ai_data.get("customer_reply") or ""))
+    if customer_reply == safety.SAFE_DEFAULT_REPLY and str(ai_data.get("customer_reply") or "").strip():
+        reason_codes.append("safety_sanitizer_triggered")
+
+    human_review_required = rules.needs_human_review(
+        case_type,
+        severity,
+        evidence_verdict,
+        confidence,
+        amount,
+    )
+    if "safety_sanitizer_triggered" in reason_codes:
+        human_review_required = True
+
+    return TicketResponse(
+        ticket_id=request.ticket_id,
+        relevant_transaction_id=relevant_transaction_id,
+        evidence_verdict=evidence_verdict,
+        case_type=case_type,
+        severity=severity,
+        department=department,
+        agent_summary=str(ai_data.get("agent_summary") or _default_summary(case_type, evidence_verdict, relevant_transaction_id)),
+        recommended_next_action=str(ai_data.get("recommended_next_action") or _default_action(case_type, relevant_transaction_id)),
+        customer_reply=customer_reply,
+        human_review_required=human_review_required,
+        confidence=confidence,
+        reason_codes=reason_codes,
+    )
+
+
+def analyze_ticket(ticket: TicketRequest) -> TicketResponse:
+    signals = rules.extract_signals(ticket.complaint)
+    case_type = rules.detect_case_type(ticket.complaint)
+    matched_txn = rules.match_transaction(signals, ticket.transaction_history, case_type)
+    verdict = rules.decide_verdict(case_type, matched_txn, signals, ticket.transaction_history)
+
+    payload = {
+        "ticket_id": ticket.ticket_id,
+        "complaint": ticket.complaint,
+        "language": ticket.language,
+        "channel": ticket.channel,
+        "user_type": ticket.user_type,
+        "campaign_context": ticket.campaign_context,
+        "metadata": ticket.metadata,
+        "transaction_history": ticket.transaction_history,
+        "extracted_signals": signals,
+        "rule_case_type": case_type.value,
+        "rule_evidence_verdict": verdict.value,
+        "matched_transaction_id": _matched_transaction_id(matched_txn),
+    }
+
+    try:
+        prompt = build_prompt(json.dumps(payload, ensure_ascii=True, default=str))
+        ai_raw = call_gemini_api(prompt)
+        if ai_raw:
+            ai_data = json.loads(clean_json_text(ai_raw))
+            if ai_data.get("ticket_id") != ticket.ticket_id:
+                raise ValueError("Gemini returned mismatched ticket_id")
+            return _normalize_ai_response(ai_data, ticket, signals, matched_txn, case_type, verdict)
+    except Exception as exc:
+        logger.warning("Gemini path failed for %s: %s", ticket.ticket_id, exc)
+        return create_fallback_response(
+            request=ticket,
+            case_type=case_type,
+            matched_txn=matched_txn,
+            verdict=verdict,
+            signals=signals,
+            reason="gemini_failure",
+        )
+
+    return create_fallback_response(
+        request=ticket,
+        case_type=case_type,
+        matched_txn=matched_txn,
+        verdict=verdict,
+        signals=signals,
+        reason="gemini_skipped",
+    )
+
+
+def analyze_ticket_flow(ticket: TicketRequest) -> TicketResponse:
+    return analyze_ticket(ticket)
