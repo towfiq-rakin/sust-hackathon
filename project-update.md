@@ -34,6 +34,7 @@ Tracked changes and updates made to QueueStorm Investigator.
 
 ### Added
 - **[agent-studio-498807-a74af6d2c474.json](file:///home/rakin/Desktop/sust-hackathon/agent-studio-498807-a74af6d2c474.json)**: Added the service account credentials JSON to the project root directory.
+- **[railway_deployment.md](file:///home/rakin/Desktop/sust-hackathon/docs/railway_deployment.md)**: Created a detailed Step-by-Step Railway Deployment Guide under the `docs/` folder.
 
 ### Modified
 - **[.gitignore](file:///home/rakin/Desktop/sust-hackathon/.gitignore)**: Ignored `agent-studio-498807-a74af6d2c474.json` and general `*.json` key files to ensure credentials are never committed, while preserving required project JSON assets (`SUST_Preli_Sample_Cases.json`, `sample_output.json`, and `skills-lock.json`).

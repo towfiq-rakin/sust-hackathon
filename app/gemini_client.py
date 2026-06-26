@@ -34,16 +34,27 @@ def call_gemini_api(prompt: str) -> Optional[str]:
     try:
         if NEW_SDK_AVAILABLE:
             if settings.USE_VERTEXAI:
-                # Resolve service account credentials JSON file to absolute path if needed
-                creds_path = settings.GOOGLE_APPLICATION_CREDENTIALS
-                if creds_path:
-                    if not os.path.isabs(creds_path):
-                        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                        creds_path = os.path.abspath(os.path.join(project_root, creds_path))
-                    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
-                    logger.info(f"Using Vertex AI with credentials from: {creds_path}")
+                # Check if service account JSON contents are provided directly as environment variable
+                raw_json = settings.VERTEX_SERVICE_ACCOUNT_JSON
+                if raw_json and raw_json.strip():
+                    import tempfile
+                    # Write to a secure temporary JSON file
+                    temp_creds = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json')
+                    temp_creds.write(raw_json)
+                    temp_creds.close()
+                    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_creds.name
+                    logger.info(f"Using Vertex AI with credentials parsed from VERTEX_SERVICE_ACCOUNT_JSON (temp path: {temp_creds.name})")
                 else:
-                    logger.info("Using Vertex AI with environment-provided credentials")
+                    # Resolve service account credentials JSON file to absolute path if needed
+                    creds_path = settings.GOOGLE_APPLICATION_CREDENTIALS
+                    if creds_path:
+                        if not os.path.isabs(creds_path):
+                            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                            creds_path = os.path.abspath(os.path.join(project_root, creds_path))
+                        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+                        logger.info(f"Using Vertex AI with credentials from: {creds_path}")
+                    else:
+                        logger.info("Using Vertex AI with environment-provided credentials")
 
                 client = genai.Client(
                     vertexai=True,

@@ -15,5 +15,6 @@ class Settings:
     VERTEX_PROJECT_ID: str = os.getenv("VERTEX_PROJECT_ID", "agent-studio-498807")
     VERTEX_LOCATION: str = os.getenv("VERTEX_LOCATION", "us-central1")
     GOOGLE_APPLICATION_CREDENTIALS: str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    VERTEX_SERVICE_ACCOUNT_JSON: str = os.getenv("VERTEX_SERVICE_ACCOUNT_JSON", "")
 
 settings = Settings()
